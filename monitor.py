@@ -231,8 +231,10 @@ def main() -> int:
     hits = sorted((l for l in listings.values() if matches(l, criteria)),
                   key=lambda x: -x.score())
 
+    # "Novo" = nunca visto no catalogo, nao apenas "novo entre os que passam".
+    # Sem isso, afrouxar um criterio faria tudo parecer novidade de uma vez.
     novos = [l for l in hits if l.part not in seen]
-    baixou = [l for l in hits if l.part in seen and l.price < seen[l.part]]
+    baixou = [l for l in hits if l.part in seen and l.price < seen[l.part] - 0.01]
 
     print(f"{len(listings)} produtos lidos · {len(hits)} passam nos critérios · "
           f"{len(novos)} novos · {len(baixou)} baixaram de preço")
@@ -252,7 +254,7 @@ def main() -> int:
 
     if not args.dry_run:
         STATE_FILE.write_text(json.dumps(
-            {l.part: l.price for l in hits}, indent=2, sort_keys=True))
+            {l.part: l.price for l in listings.values()}, indent=2, sort_keys=True))
 
     return 0
 

@@ -2,8 +2,13 @@ name: monitor
 
 on:
   schedule:
-    - cron: "0 13 * * 1,4"   # segundas e quintas, 10h de Brasilia
-  workflow_dispatch:          # botao manual na aba Actions
+    - cron: "17 13 * * 1,4"   # segundas e quintas, ~10h de Brasilia
+  workflow_dispatch:
+    inputs:
+      force_notify:
+        description: "Mandar mensagem no Telegram mesmo sem novidade"
+        type: boolean
+        default: true
 
 permissions:
   contents: write             # para commitar o state.json atualizado
@@ -12,15 +17,32 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Conferir se os secrets chegaram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          test -n "$TELEGRAM_TOKEN"   || { echo "::error::TELEGRAM_TOKEN nao esta configurado"; exit 1; }
+          test -n "$TELEGRAM_CHAT_ID" || { echo "::error::TELEGRAM_CHAT_ID nao esta configurado"; exit 1; }
+          echo "secrets presentes (token com ${#TELEGRAM_TOKEN} caracteres)"
+
       - name: Rodar monitor
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python monitor.py
+          FORCE: ${{ inputs.force_notify }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            python monitor.py --force-notify
+          else
+            python monitor.py
+          fi
+
       - name: Guardar o estado
         run: |
           git config user.name  "monitor-bot"

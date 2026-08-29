@@ -188,9 +188,9 @@ def notify(text: str) -> None:
     token = os.environ.get("TELEGRAM_TOKEN")
     chat = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
-        print("[aviso] TELEGRAM_TOKEN/TELEGRAM_CHAT_ID ausentes — só imprimindo.",
-              file=sys.stderr)
-        return
+        raise RuntimeError(
+            "TELEGRAM_TOKEN e/ou TELEGRAM_CHAT_ID ausentes. No GitHub: "
+            "Settings > Secrets and variables > Actions. Local: exporte as variaveis.")
     payload = json.dumps({"chat_id": chat, "text": text,
                           "parse_mode": "Markdown",
                           "disable_web_page_preview": False}).encode()
@@ -203,7 +203,10 @@ def notify(text: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="nao notifica e nao grava o estado")
+    ap.add_argument("--force-notify", action="store_true",
+                    help="manda o resumo mesmo sem novidade (util para testar a ligacao)")
     args = ap.parse_args()
 
     criteria = load_criteria()
@@ -241,7 +244,7 @@ def main() -> int:
     for l in hits:
         print("  " + l.line())
 
-    if novos or baixou:
+    if novos or baixou or args.force_notify:
         partes = ["*Monitor Apple Refurb*"]
         for l in novos:
             partes.append(f"🆕 [{l.chip} {l.ram_gb}GB]({l.url}) — US$ {l.price:,.0f} · "
@@ -249,8 +252,23 @@ def main() -> int:
         for l in baixou:
             partes.append(f"📉 [{l.chip} {l.ram_gb}GB]({l.url}) — "
                           f"US$ {seen[l.part]:,.0f} → *US$ {l.price:,.0f}*")
+        if args.force_notify and not novos and not baixou:
+            # Execucao manual sem novidade: manda o retrato de agora, para
+            # confirmar que a ligacao com o Telegram esta viva.
+            partes.append(f"_Sem novidade. {len(listings)} produtos no catalogo, "
+                          f"{len(hits)} passam nos criterios:_")
+            for l in hits[:5]:
+                partes.append(f"• [{l.chip} {l.ram_gb}GB]({l.url}) — US$ {l.price:,.0f} · "
+                              f"{l.bandwidth} GB/s · score {l.score()}")
+            if not hits:
+                partes.append("_Nenhum item passa nos criterios agora._")
         if not args.dry_run:
-            notify("\n".join(partes))
+            try:
+                notify("\n".join(partes))
+                print("[ok] notificacao enviada no Telegram")
+            except Exception as e:  # noqa: BLE001
+                print(f"[ERRO] falha ao notificar: {e}", file=sys.stderr)
+                return 3
 
     if not args.dry_run:
         STATE_FILE.write_text(json.dumps(

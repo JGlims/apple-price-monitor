@@ -35,6 +35,18 @@ máquina com Python.
   Guardar só os aprovados fazia tudo parecer novidade ao afrouxar um critério.
 - **Silêncio é o pior modo de falha.** `notify()` levanta exceção se o secret faltar, e o
   workflow confere os secrets antes de rodar. Um bot mudo parece funcionando.
+- **Erro engolido custa horas.** O `except` imprimia só `HTTP Error 400: Bad Request` e
+  jogava fora o corpo da resposta, onde o Telegram diz o motivo exato. `_post()` agora lê
+  `description` do JSON e coloca no texto do erro. Nunca capture `HTTPError` sem ler o corpo.
+- **`parse_mode: Markdown` (legado) é frágil.** Um `_` ou `*` solto num título de produto
+  derruba a mensagem inteira com 400. Usamos HTML com `esc()` em tudo que é interpolado, e
+  se ainda assim falhar por parsing, reenviamos sem formatação.
+- **Secret com espaço ou aspas coladas.** `TELEGRAM_CHAT_ID` passa por `.strip()` e
+  `.strip('"\'')` porque colar do BotFather traz sujeira e o erro resultante ("chat not
+  found") aponta para o lugar errado.
+- **Critério nenhum é sábio o bastante para ser a única porta.** Quando nada passa, a
+  mensagem lista os melhores abaixo do teto de preço. Estoque que rodou virava silêncio, e
+  silêncio parece "nada mudou" quando na verdade era "olha isto aqui".
 
 ## Por que os critérios são esses
 

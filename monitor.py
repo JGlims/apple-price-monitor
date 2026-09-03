@@ -13,10 +13,12 @@ Uso local:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
@@ -184,21 +186,48 @@ def matches(l: Listing, c: dict) -> bool:
     return True
 
 
+def esc(s: object) -> str:
+    """Escapa o que vai dentro de uma tag HTML do Telegram."""
+    return html.escape(str(s), quote=False)
+
+
+def _post(token: str, chat: str, text: str, parse_mode: str | None) -> None:
+    body: dict = {"chat_id": chat, "text": text, "disable_web_page_preview": False}
+    if parse_mode:
+        body["parse_mode"] = parse_mode
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+    except urllib.error.HTTPError as e:
+        # O Telegram diz exatamente o que esta errado no corpo da resposta.
+        # Engolir isso foi o que transformou um erro obvio em uma cacada.
+        try:
+            detail = json.loads(e.read().decode()).get("description", "")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        raise RuntimeError(f"HTTP {e.code} do Telegram: {detail or 'sem descricao'}") from None
+
+
 def notify(text: str) -> None:
-    token = os.environ.get("TELEGRAM_TOKEN")
-    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    token = (os.environ.get("TELEGRAM_TOKEN") or "").strip()
+    # O chat_id costuma vir do secret com espaco, aspas ou quebra de linha coladas.
+    chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip().strip('"\'')
     if not token or not chat:
         raise RuntimeError(
             "TELEGRAM_TOKEN e/ou TELEGRAM_CHAT_ID ausentes. No GitHub: "
             "Settings > Secrets and variables > Actions. Local: exporte as variaveis.")
-    payload = json.dumps({"chat_id": chat, "text": text,
-                          "parse_mode": "Markdown",
-                          "disable_web_page_preview": False}).encode()
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        r.read()
+    try:
+        _post(token, chat, text, "HTML")
+    except RuntimeError as e:
+        if "parse" not in str(e).lower():
+            raise
+        # Formatacao quebrada nao deve custar a mensagem: manda sem marcacao.
+        print(f"[aviso] {e} — reenviando sem formatacao", file=sys.stderr)
+        _post(token, chat, re.sub(r"<[^>]+>", "", text), None)
 
 
 def main() -> int:
@@ -207,7 +236,19 @@ def main() -> int:
                     help="nao notifica e nao grava o estado")
     ap.add_argument("--force-notify", action="store_true",
                     help="manda o resumo mesmo sem novidade (util para testar a ligacao)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="so testa a ligacao com o Telegram e sai")
     args = ap.parse_args()
+
+    if args.selftest:
+        # Testa a fiacao sozinha, sem depender do scraper nem do formato da mensagem.
+        try:
+            notify("Selftest do monitor: a ligacao com o Telegram esta viva.")
+        except Exception as e:  # noqa: BLE001
+            print(f"[ERRO] selftest falhou: {e}", file=sys.stderr)
+            return 3
+        print("[ok] selftest passou — mensagem enviada")
+        return 0
 
     criteria = load_criteria()
     seen: dict[str, float] = {}
@@ -236,6 +277,11 @@ def main() -> int:
 
     # "Novo" = nunca visto no catalogo, nao apenas "novo entre os que passam".
     # Sem isso, afrouxar um criterio faria tudo parecer novidade de uma vez.
+    # Rede de seguranca: o que cabe no bolso, ainda que falhe nos outros filtros.
+    quase = sorted((l for l in listings.values()
+                    if l.price <= criteria["max_price"] and l not in hits),
+                   key=lambda x: -x.score())
+
     novos = [l for l in hits if l.part not in seen]
     baixou = [l for l in hits if l.part in seen and l.price < seen[l.part] - 0.01]
 
@@ -245,23 +291,31 @@ def main() -> int:
         print("  " + l.line())
 
     if novos or baixou or args.force_notify:
-        partes = ["*Monitor Apple Refurb*"]
+        partes = ["<b>Monitor Apple Refurb</b>"]
         for l in novos:
-            partes.append(f"🆕 [{l.chip} {l.ram_gb}GB]({l.url}) — US$ {l.price:,.0f} · "
-                          f"{l.bandwidth} GB/s · score {l.score()}")
+            partes.append(f'🆕 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
+                          f"US$ {l.price:,.0f} · {l.bandwidth} GB/s · score {l.score()}")
         for l in baixou:
-            partes.append(f"📉 [{l.chip} {l.ram_gb}GB]({l.url}) — "
-                          f"US$ {seen[l.part]:,.0f} → *US$ {l.price:,.0f}*")
+            partes.append(f'📉 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
+                          f"US$ {seen[l.part]:,.0f} → <b>US$ {l.price:,.0f}</b>")
         if args.force_notify and not novos and not baixou:
             # Execucao manual sem novidade: manda o retrato de agora, para
             # confirmar que a ligacao com o Telegram esta viva.
-            partes.append(f"_Sem novidade. {len(listings)} produtos no catalogo, "
-                          f"{len(hits)} passam nos criterios:_")
+            partes.append(f"<i>Sem novidade. {len(listings)} produtos no catalogo, "
+                          f"{len(hits)} passam nos criterios.</i>")
             for l in hits[:5]:
-                partes.append(f"• [{l.chip} {l.ram_gb}GB]({l.url}) — US$ {l.price:,.0f} · "
-                              f"{l.bandwidth} GB/s · score {l.score()}")
+                partes.append(f'• <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
+                              f"US$ {l.price:,.0f} · {l.bandwidth} GB/s · score {l.score()}")
             if not hits:
-                partes.append("_Nenhum item passa nos criterios agora._")
+                # Criterio nenhum e sabio o bastante para ser a unica porta.
+                # Sem isto, um estoque que rodou vira silencio e o silencio
+                # parece "nada mudou" quando na verdade era "olha isto aqui".
+                partes.append("<i>Nenhum item passa nos criterios. "
+                              "Melhores abaixo do teto de preco:</i>")
+                for l in quase[:5]:
+                    partes.append(f'• <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB '
+                                  f"{l.ssd_gb}GB</a> — US$ {l.price:,.0f} · "
+                                  f"{l.bandwidth} GB/s · score {l.score()}")
         if not args.dry_run:
             try:
                 notify("\n".join(partes))

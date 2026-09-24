@@ -232,6 +232,22 @@ def _post(token: str, chat: str, text: str, parse_mode: str | None) -> None:
         raise RuntimeError(f"HTTP {e.code} do Telegram: {detail or 'sem descricao'}") from None
 
 
+def _mascara(chat: str) -> str:
+    """Mostra o bastante para reconhecer o chat_id sem imprimi-lo inteiro."""
+    return f"{len(chat)} digitos terminando em {chat[-3:]}" if len(chat) > 3 else "curto demais"
+
+
+def _quem_sou(token: str) -> str:
+    """Pergunta ao Telegram de quem e este token. Nao expoe o segredo."""
+    try:
+        with urllib.request.urlopen(
+                f"https://api.telegram.org/bot{token}/getMe", timeout=15) as r:
+            u = json.loads(r.read()).get("result", {}).get("username")
+            return f"token do bot @{u}" if u else "token aceito, bot sem username"
+    except Exception:  # noqa: BLE001
+        return "token RECUSADO pelo Telegram (revogado ou errado)"
+
+
 def notify(text: str) -> None:
     token = (os.environ.get("TELEGRAM_TOKEN") or "").strip()
     # O chat_id costuma vir do secret com espaco, aspas ou quebra de linha coladas.
@@ -244,7 +260,11 @@ def notify(text: str) -> None:
         _post(token, chat, text, "HTML")
     except RuntimeError as e:
         if "parse" not in str(e).lower():
-            raise
+            # "400 Bad Request" nao diz de quem e o token nem para onde ia
+            # a mensagem. Ja perdi uma sessao inteira por isso: o Telegram
+            # aceitava o envio e a mensagem chegava no chat de OUTRO bot.
+            # getMe nao expoe o segredo e responde a pergunta certa.
+            raise RuntimeError(f"{e} | {_quem_sou(token)} | chat_id {_mascara(chat)}") from None
         # Formatacao quebrada nao deve custar a mensagem: manda sem marcacao.
         print(f"[aviso] {e} — reenviando sem formatacao", file=sys.stderr)
         _post(token, chat, re.sub(r"<[^>]+>", "", text), None)

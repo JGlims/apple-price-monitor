@@ -35,6 +35,10 @@ máquina com Python.
   Guardar só os aprovados fazia tudo parecer novidade ao afrouxar um critério.
 - **Silêncio é o pior modo de falha.** `notify()` levanta exceção se o secret faltar, e o
   workflow confere os secrets antes de rodar. Um bot mudo parece funcionando.
+- **Um erro de rede precisa dizer QUEM e PARA ONDE.** "400 Bad Request" nao diz de
+  quem e o token nem para onde ia a mensagem. `_quem_sou()` pergunta ao `getMe` e
+  `_mascara()` mostra o formato do chat_id sem imprimi-lo. Sem os dois, o caso em que
+  o Telegram aceita o envio e a mensagem chega no chat de outro bot fica invisivel.
 - **Erro engolido custa horas.** O `except` imprimia só `HTTP Error 400: Bad Request` e
   jogava fora o corpo da resposta, onde o Telegram diz o motivo exato. `_post()` agora lê
   `description` do JSON e coloca no texto do erro. Nunca capture `HTTPError` sem ler o corpo.

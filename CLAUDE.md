@@ -61,6 +61,32 @@ máquina com Python.
   mensagem lista os melhores abaixo do teto de preço. Estoque que rodou virava silêncio, e
   silêncio parece "nada mudou" quando na verdade era "olha isto aqui".
 
+## O dia em que a Apple mudar a página
+
+Não é "se". O modo de falha perigoso **não** é a página sumir — isso estoura e
+aparece. É a Apple renomear um campo: aí nada estoura, o valor vira 0, nada passa
+nos critérios, e o monitor diz "0 novos" com toda a confiança. Foi exatamente
+assim que ele ficou três semanas mudo.
+
+Quatro camadas contra isso:
+
+1. **`conferir_saude()`** olha o que hoje é 100% confiável — chip reconhecido,
+   preço > 0, SSD > 0, tamanho do catálogo — e alerta se degradar. Os limiares
+   foram medidos no catálogo real (382 brutos → 63 produtos), não chutados.
+2. **A RAM fica fora da conferência de propósito.** A Apple não publica
+   `tsMemorySize` nos MacBook Pro de 16": 51% de ausência é o normal. Esses itens
+   aparecem numa lista separada quando cabem no teto, em vez de sumirem calados.
+3. **Problema de saúde para a execução** (código 4): não notifica e **não grava o
+   `state.json`**. Gravar um catálogo com preço zerado envenenaria a comparação
+   para sempre — na execução seguinte tudo pareceria ter subido a partir de zero.
+4. **`testes/teste_parse.py`** roda no CI contra `testes/amostra_apple.json`, uma
+   amostra real salva. Mudança nos nomes dos campos falha ali, antes de ir para
+   produção. Quando a Apple mudar de verdade: rode os testes, veja qual asserção
+   caiu, conserte, e **regrave a amostra**.
+
+Um alarme que nunca foi visto tocar não é um alarme — por isso o teste corrompe
+o catálogo de propósito e exige que cada verificação dispare.
+
 ## Por que o preço aparece em três números
 
 `US$ 1.699 · R$ 8.822 · pousado R$ 11.826`. O do meio é a conversão pura e

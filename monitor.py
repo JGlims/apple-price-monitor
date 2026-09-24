@@ -233,6 +233,70 @@ def reais(v: float) -> str:
     return f"{v:,.0f}".replace(",", ".")
 
 
+# Medidos no catalogo real em 24/09/2026, para os limiares nao serem chute:
+#   382 registros brutos -> 63 produtos  | chip reconhecido 100%
+#   preco > 0: 100%  | SSD > 0: 100%  | RAM ausente: 51%
+# A RAM fica de fora da conferencia de proposito: a Apple simplesmente nao
+# publica esse campo nos MacBook Pro de 16", entao 51% e o normal, nao um
+# defeito. Os outros tres sao 100% hoje, e por isso servem de sentinela.
+SAUDE = {
+    "min_produtos": 20,        # o catalogo ja esteve em 126 e em 63
+    "min_frac_chip": 0.80,
+    "min_frac_preco": 0.95,
+    "min_frac_ssd": 0.90,
+    "max_encolhimento": 0.60,  # queda brusca vs a execucao anterior
+}
+
+
+def conferir_saude(ls: list, n_brutos: int, seen: dict) -> list[str]:
+    """Problemas que NAO levantam excecao mas invalidam o resultado.
+
+    O modo de falha perigoso nao e a pagina sumir -- e a Apple renomear um
+    campo. Ai nada estoura: o valor vira 0, nada passa nos criterios, e o
+    monitor diz "0 novos" com toda a confianca do mundo. Foi exatamente
+    assim que ele ficou tres semanas mudo. Isto existe para que a proxima
+    vez seja um aviso no Telegram, e nao mais tres semanas de silencio.
+    """
+    p = []
+    if n_brutos and not ls:
+        p.append(f"{n_brutos} registros lidos da pagina, mas nenhum virou produto: "
+                 "o formato dos campos mudou.")
+    if not ls:
+        return p
+    n = len(ls)
+    if n < SAUDE["min_produtos"]:
+        p.append(f"so {n} produtos no catalogo (esperado bem mais).")
+    fr = lambda cond: sum(1 for l in ls if cond(l)) / n
+    if (f := fr(lambda l: l.chip in BANDWIDTH)) < SAUDE["min_frac_chip"]:
+        p.append(f"chip reconhecido em so {f:.0%} dos itens.")
+    if (f := fr(lambda l: l.price > 0)) < SAUDE["min_frac_preco"]:
+        p.append(f"preco valido em so {f:.0%} dos itens.")
+    if (f := fr(lambda l: l.ssd_gb > 0)) < SAUDE["min_frac_ssd"]:
+        p.append(f"SSD lido em so {f:.0%} dos itens.")
+    if seen and n < len(seen) * (1 - SAUDE["max_encolhimento"]):
+        p.append(f"o catalogo caiu de {len(seen)} para {n} itens de uma vez.")
+    return p
+
+
+def avisar_quebra(motivos: list[str]) -> None:
+    """Alerta de que o monitor perdeu a confianca em si mesmo.
+
+    Nunca levanta excecao: se o Telegram tambem estiver fora, o problema
+    original ainda precisa aparecer no log.
+    """
+    txt = ("<b>\u26a0\ufe0f Monitor Apple Refurb</b>\n"
+           "<i>O scraper pode estar quebrado. A Apple provavelmente mudou a pagina.</i>\n\n"
+           + "\n".join(f"\u2022 {esc(mo)}" for mo in motivos)
+           + "\n\n<i>Ate isto ser consertado, a ausencia de avisos nao quer "
+             "dizer que nao apareceu nada.</i>")
+    for mo in motivos:
+        print(f"[SAUDE] {mo}", file=sys.stderr)
+    try:
+        notify(txt)
+    except Exception as e:  # noqa: BLE001
+        print(f"[erro] nao consegui nem avisar da quebra: {e}", file=sys.stderr)
+
+
 def linha_item(l, criteria: dict, cambio: float | None, prefixo: str) -> str:
     """Uma linha de produto. Em dolar sempre; em real quando ha cotacao."""
     precos = f"US$ {l.price:,.0f}".replace(",", ".")
@@ -367,21 +431,50 @@ def main() -> int:
         seen = json.loads(STATE_FILE.read_text())
 
     listings: dict[str, Listing] = {}
+    n_brutos = 0
     for url in FEED_URLS:
         try:
             raw_products = extract_products(fetch(url))
         except Exception as e:  # noqa: BLE001
             print(f"[erro] {url}: {e}", file=sys.stderr)
             continue
+        n_brutos += len(raw_products)
         for raw in raw_products:
             l = parse_listing(raw)
             if l:
                 listings[l.part] = l
 
+    problemas = conferir_saude(list(listings.values()), n_brutos, seen)
+
     if not listings:
-        print("[erro] nenhum produto extraído — o formato da página provavelmente mudou.",
-              file=sys.stderr)
+        problemas.insert(0, "nenhum produto extraido da pagina.")
+        if args.dry_run:
+            for mo in problemas:
+                print(f"[SAUDE] {mo}", file=sys.stderr)
+        else:
+            avisar_quebra(problemas)   # ja imprime no log
         return 2
+
+    if problemas:
+        # Para aqui de proposito, em vez de avisar e seguir.
+        #
+        # Dois motivos, e o segundo e o grave. Primeiro: com preco zerado o
+        # monitor anunciaria 18 "quedas de preco" que nao existem, e voce
+        # poderia agir em cima disso. Segundo: gravar esse catalogo no
+        # state.json envenenaria a comparacao para sempre -- na execucao
+        # seguinte tudo pareceria ter SUBIDO de preco, a partir de zero.
+        #
+        # Os limiares ficam bem abaixo da variacao normal (chip a 80%
+        # quando o real e 100%), entao disparar aqui significa que algo
+        # esta mesmo errado. Num monitor, confianca vale mais que cobertura.
+        if args.dry_run:
+            for mo in problemas:
+                print(f"[SAUDE] {mo}", file=sys.stderr)
+        else:
+            avisar_quebra(problemas)   # ja imprime no log
+        print("[SAUDE] nao vou notificar nem gravar o estado com leitura suspeita.",
+              file=sys.stderr)
+        return 4
 
     hits = sorted((l for l in listings.values() if matches(l, criteria)),
                   key=lambda x: -x.score())
@@ -392,6 +485,17 @@ def main() -> int:
     quase = sorted((l for l in listings.values()
                     if l.price <= criteria["max_price"] and l not in hits),
                    key=lambda x: -x.score())
+
+    # A Apple nao publica a RAM dos MacBook Pro de 16". Sem isto, um M5 Pro
+    # que caisse para dentro do teto sumiria calado, reprovado por um campo
+    # que nunca existiu. Aparecem separados, com a ressalva.
+    sem_ram = sorted(
+        (l for l in listings.values()
+         if l.ram_gb == 0
+         and l.price <= criteria["stretch_price"]
+         and l.bandwidth >= criteria["stretch_min_bandwidth"]
+         and l.chip not in criteria.get("blocked_chips", [])),
+        key=lambda x: x.price)
 
     novos = [l for l in hits if l.part not in seen]
     baixou = [l for l in hits if l.part in seen and l.price < seen[l.part] - 0.01]
@@ -429,6 +533,12 @@ def main() -> int:
                               "Melhores abaixo do teto de preco:</i>")
                 for l in quase[:5]:
                     partes.append(linha_item(l, criteria, cambio, "\u2022"))
+        if sem_ram:
+            partes.append("\n<i>A Apple nao informa a RAM destes. Cabem no teto "
+                          "e tem banda de sobra \u2014 vale abrir e conferir:</i>")
+            for l in sem_ram[:3]:
+                partes.append(linha_item(l, criteria, cambio, "\u2753"))
+
         if cambio:
             # Sem esta linha o "pousado" vira um numero magico. Com ela,
             # da para conferir a conta e mudar as premissas no criteria.json.

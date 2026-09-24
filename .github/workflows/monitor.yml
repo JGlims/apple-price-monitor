@@ -22,6 +22,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Rodar os testes
+        # Contra a amostra salva, sem rede. Se a Apple mudar os nomes dos
+        # campos, o codigo novo falha aqui em vez de passar a devolver
+        # zeros calados em producao.
+        run: python testes/teste_parse.py
+
       - name: Conferir se os secrets chegaram
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}

@@ -37,8 +37,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FORCE: ${{ inputs.force_notify }}
         run: |
+          # Segunda-feira leva --digest: manda o retrato do mercado mesmo
+          # sem novidade. Sem isso, "nada aconteceu" e "o monitor quebrou"
+          # chegam exatamente iguais na sua tela — que foi o que aconteceu
+          # por tres semanas. Quinta continua calada a menos que haja noticia.
           if [ "$FORCE" = "true" ]; then
             python monitor.py --force-notify
+          elif [ "$(date -u +%u)" = "1" ]; then
+            python monitor.py --digest
           else
             python monitor.py
           fi

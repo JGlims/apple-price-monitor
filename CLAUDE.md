@@ -44,6 +44,15 @@ máquina com Python.
 - **Secret com espaço ou aspas coladas.** `TELEGRAM_CHAT_ID` passa por `.strip()` e
   `.strip('"\'')` porque colar do BotFather traz sujeira e o erro resultante ("chat not
   found") aponta para o lugar errado.
+- **Um critério pode não descrever nenhuma máquina que existe.** `min_bandwidth: 250`
+  combinado com `max_price: 1900` exigia um chip Pro por menos de US$ 1.900 — e não
+  existe. O monitor rodou três semanas com dez execuções "success" e silêncio total,
+  enquanto um M5 24GB caía de US$ 1.869 para US$ 1.699. Por isso `why()` tem **duas**
+  regras (cabe no orçamento / chip Pro no alcance) em vez de um AND impossível, e a
+  mensagem diz qual delas disparou.
+- **Sucesso verde não é prova de nada.** O exit code 0 só diz que o script terminou.
+  Por isso a segunda-feira leva `--digest`: um batimento semanal que torna
+  "nada aconteceu" distinguível de "quebrou". Quinta continua calada.
 - **Critério nenhum é sábio o bastante para ser a única porta.** Quando nada passa, a
   mensagem lista os melhores abaixo do teto de preço. Estoque que rodou virava silêncio, e
   silêncio parece "nada mudou" quando na verdade era "olha isto aqui".

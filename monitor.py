@@ -167,23 +167,43 @@ def parse_listing(raw: dict) -> Listing | None:
     )
 
 
+DEFAULTS = {
+    "max_price": 1900, "min_ram_gb": 24, "min_bandwidth": 120,
+    "blocked_chips": ["M3 Pro"],
+    "stretch_price": 2300, "stretch_min_bandwidth": 250,
+}
+
+
 def load_criteria() -> dict:
+    c = dict(DEFAULTS)
     if CRITERIA_FILE.exists():
-        return json.loads(CRITERIA_FILE.read_text())
-    return {"max_price": 1900, "min_ram_gb": 24, "min_bandwidth": 250,
-            "blocked_chips": ["M3 Pro"]}
+        c.update(json.loads(CRITERIA_FILE.read_text()))
+    return c
+
+
+def why(l: Listing, c: dict) -> str | None:
+    """Por que este item merece um aviso — ou None se nao merece.
+
+    Duas regras, porque sao dois desejos diferentes. A primeira e
+    "cabe no orcamento e presta". A segunda e "um chip Pro entrou no
+    alcance", que vale um esticao e por isso tem teto proprio.
+    Uma regra so, com piso de banda alto E teto de preco baixo,
+    nao descrevia nenhuma maquina que existe: era a razao de o
+    monitor rodar por tres semanas sem nunca falar.
+    """
+    if l.chip in c.get("blocked_chips", []):
+        return None
+    if l.ram_gb < c["min_ram_gb"]:
+        return None
+    if l.price <= c["max_price"] and l.bandwidth >= c["min_bandwidth"]:
+        return "cabe no orcamento"
+    if l.price <= c["stretch_price"] and l.bandwidth >= c["stretch_min_bandwidth"]:
+        return "chip Pro no alcance"
+    return None
 
 
 def matches(l: Listing, c: dict) -> bool:
-    if l.price > c["max_price"]:
-        return False
-    if l.ram_gb < c["min_ram_gb"]:
-        return False
-    if l.bandwidth < c["min_bandwidth"]:
-        return False
-    if l.chip in c.get("blocked_chips", []):
-        return False
-    return True
+    return why(l, c) is not None
 
 
 def esc(s: object) -> str:
@@ -238,6 +258,8 @@ def main() -> int:
                     help="manda o resumo mesmo sem novidade (util para testar a ligacao)")
     ap.add_argument("--selftest", action="store_true",
                     help="so testa a ligacao com o Telegram e sai")
+    ap.add_argument("--digest", action="store_true",
+                    help="manda o retrato do mercado mesmo sem novidade (batimento semanal)")
     args = ap.parse_args()
 
     if args.selftest:
@@ -290,15 +312,16 @@ def main() -> int:
     for l in hits:
         print("  " + l.line())
 
-    if novos or baixou or args.force_notify:
+    if novos or baixou or args.force_notify or args.digest:
         partes = ["<b>Monitor Apple Refurb</b>"]
         for l in novos:
-            partes.append(f'🆕 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
-                          f"US$ {l.price:,.0f} · {l.bandwidth} GB/s · score {l.score()}")
+            partes.append(f'🆕 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB '
+                          f'{l.ssd_gb}GB</a> — US$ {l.price:,.0f} · {l.bandwidth} GB/s · '
+                          f"score {l.score()} · <i>{esc(why(l, criteria))}</i>")
         for l in baixou:
             partes.append(f'📉 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
                           f"US$ {seen[l.part]:,.0f} → <b>US$ {l.price:,.0f}</b>")
-        if args.force_notify and not novos and not baixou:
+        if (args.force_notify or args.digest) and not novos and not baixou:
             # Execucao manual sem novidade: manda o retrato de agora, para
             # confirmar que a ligacao com o Telegram esta viva.
             partes.append(f"<i>Sem novidade. {len(listings)} produtos no catalogo, "

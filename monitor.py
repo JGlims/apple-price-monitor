@@ -171,7 +171,76 @@ DEFAULTS = {
     "max_price": 1900, "min_ram_gb": 24, "min_bandwidth": 120,
     "blocked_chips": ["M3 Pro"],
     "stretch_price": 2300, "stretch_min_bandwidth": 250,
+    # Orange County (regiao da Disney) = 6,5%. Osceola = 7,5%.
+    "imposto_vendas_eua": 0.065,
+    "iof": 0.035,               # confirmado para 2026, Decreto 6.306/2007
+    "isencao_usd": 1000,        # isencao aerea, por pessoa
+    "imposto_importacao": 0.50, # sobre o excedente
 }
+
+
+# Duas fontes: a primeira e brasileira e atualiza de minuto em minuto,
+# a segunda existe para o dia em que a primeira cair. Ordem importa.
+COTACAO_FONTES = [
+    ("https://economia.awesomeapi.com.br/json/last/USD-BRL",
+     lambda d: float(d["USDBRL"]["ask"])),
+    ("https://open.er-api.com/v6/latest/USD",
+     lambda d: float(d["rates"]["BRL"])),
+]
+
+
+def cotacao() -> float | None:
+    """Dolar de hoje, ou None se nenhuma fonte responder.
+
+    Preco em real e conveniencia, nao o trabalho do monitor: se a API
+    cair, a mensagem sai so em dolar em vez de nao sair.
+    """
+    for url, extrai in COTACAO_FONTES:
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                v = extrai(json.loads(r.read()))
+        except Exception:  # noqa: BLE001
+            continue
+        # Se a API mudar de formato e devolver lixo, e melhor nao mostrar
+        # nada do que mostrar um numero errado com cara de certo.
+        if 3.0 < v < 20.0:
+            return v
+    return None
+
+
+def custo_brasil(usd: float, c: dict, cambio: float) -> float:
+    """Quanto o notebook custa de verdade, pousado no Brasil.
+
+    A conversao pura engana: US$ 1.699 nao vira R$ 8.800 no seu bolso.
+    Entre a etiqueta e o Brasil entram tres coisas, nesta ordem:
+
+      1. imposto de venda da Florida, cobrado no caixa
+      2. IOF, sobre o que passou no cartao (nao sobre o imposto de
+         importacao, que voce paga em reais na chegada)
+      3. imposto de importacao: a isencao aerea cobre US$ 1.000 por
+         pessoa e o excedente paga 50%. Notebook nao entra em
+         "bens de uso pessoal" -- e declaravel.
+    """
+    compra_usd = usd * (1 + c["imposto_vendas_eua"])
+    brl_compra = compra_usd * cambio * (1 + c["iof"])
+    excedente = max(0.0, compra_usd - c["isencao_usd"])
+    brl_importacao = excedente * c["imposto_importacao"] * cambio
+    return brl_compra + brl_importacao
+
+
+def reais(v: float) -> str:
+    """1234.5 -> '1.234'. O separador brasileiro, nao o americano."""
+    return f"{v:,.0f}".replace(",", ".")
+
+
+def linha_item(l, criteria: dict, cambio: float | None, prefixo: str) -> str:
+    """Uma linha de produto. Em dolar sempre; em real quando ha cotacao."""
+    precos = f"US$ {l.price:,.0f}".replace(",", ".")
+    if cambio:
+        precos += (f" \u00b7 R$ {reais(l.price * cambio)}"
+                   f" \u00b7 pousado <b>R$ {reais(custo_brasil(l.price, criteria, cambio))}</b>")
+    return (f'{prefixo} <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB {l.ssd_gb}GB</a>'
+            f" \u2014 {precos} \u00b7 {l.bandwidth} GB/s \u00b7 score {l.score()}")
 
 
 def load_criteria() -> dict:
@@ -333,22 +402,25 @@ def main() -> int:
         print("  " + l.line())
 
     if novos or baixou or args.force_notify or args.digest:
-        partes = ["<b>Monitor Apple Refurb</b>"]
+        cambio = cotacao()
+        cab = "<b>Monitor Apple Refurb</b>"
+        if cambio:
+            cab += "  <i>(US$ 1 = R$ " + f"{cambio:.2f}".replace(".", ",") + ")</i>"
+        partes = [cab]
         for l in novos:
-            partes.append(f'🆕 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB '
-                          f'{l.ssd_gb}GB</a> — US$ {l.price:,.0f} · {l.bandwidth} GB/s · '
-                          f"score {l.score()} · <i>{esc(why(l, criteria))}</i>")
+            partes.append(linha_item(l, criteria, cambio, "\U0001F195")
+                          + f" · <i>{esc(why(l, criteria))}</i>")
         for l in baixou:
-            partes.append(f'📉 <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
-                          f"US$ {seen[l.part]:,.0f} → <b>US$ {l.price:,.0f}</b>")
+            antes = f"US$ {seen[l.part]:,.0f}".replace(",", ".")
+            partes.append(linha_item(l, criteria, cambio, "\U0001F4C9")
+                          + f" · <i>era {antes}</i>")
         if (args.force_notify or args.digest) and not novos and not baixou:
             # Execucao manual sem novidade: manda o retrato de agora, para
             # confirmar que a ligacao com o Telegram esta viva.
             partes.append(f"<i>Sem novidade. {len(listings)} produtos no catalogo, "
                           f"{len(hits)} passam nos criterios.</i>")
             for l in hits[:5]:
-                partes.append(f'• <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB</a> — '
-                              f"US$ {l.price:,.0f} · {l.bandwidth} GB/s · score {l.score()}")
+                partes.append(linha_item(l, criteria, cambio, "\u2022"))
             if not hits:
                 # Criterio nenhum e sabio o bastante para ser a unica porta.
                 # Sem isto, um estoque que rodou vira silencio e o silencio
@@ -356,9 +428,18 @@ def main() -> int:
                 partes.append("<i>Nenhum item passa nos criterios. "
                               "Melhores abaixo do teto de preco:</i>")
                 for l in quase[:5]:
-                    partes.append(f'• <a href="{esc(l.url)}">{esc(l.chip)} {l.ram_gb}GB '
-                                  f"{l.ssd_gb}GB</a> — US$ {l.price:,.0f} · "
-                                  f"{l.bandwidth} GB/s · score {l.score()}")
+                    partes.append(linha_item(l, criteria, cambio, "\u2022"))
+        if cambio:
+            # Sem esta linha o "pousado" vira um numero magico. Com ela,
+            # da para conferir a conta e mudar as premissas no criteria.json.
+            pct = lambda x: f"{x * 100:g}".replace(".", ",")
+            partes.append(
+                f"\n<i>Pousado = etiqueta + {pct(criteria['imposto_vendas_eua'])}% de imposto "
+                f"na Florida + {pct(criteria['iof'])}% de IOF + "
+                f"{pct(criteria['imposto_importacao'])}% sobre o que passa de "
+                f"US$ {reais(criteria['isencao_usd'])} de isencao. "
+                "Estimativa, nao promessa.</i>")
+
         if not args.dry_run:
             try:
                 notify("\n".join(partes))

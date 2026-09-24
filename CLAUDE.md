@@ -61,6 +61,24 @@ máquina com Python.
   mensagem lista os melhores abaixo do teto de preço. Estoque que rodou virava silêncio, e
   silêncio parece "nada mudou" quando na verdade era "olha isto aqui".
 
+## Por que o preço aparece em três números
+
+`US$ 1.699 · R$ 8.822 · pousado R$ 11.826`. O do meio é a conversão pura e
+**engana**: entre a etiqueta e o Brasil entram o imposto de venda da Flórida
+(cobrado no caixa), o IOF sobre o que passa no cartão, e o imposto de importação
+de 50% sobre o que excede a isenção aérea de US$ 1.000 por pessoa — notebook não
+entra em "bens de uso pessoal", é declarável. São quase R$ 3.000 de diferença.
+
+A ordem importa: o IOF incide sobre a compra, não sobre o imposto de importação,
+que você paga em reais na chegada. As premissas ficam no `criteria.json`, não no
+código, e a mensagem imprime todas no rodapé — número sem a conta do lado vira
+número mágico.
+
+**A cotação nunca pode derrubar o monitor.** `cotacao()` tem duas fontes, e se
+as duas falharem devolve `None` e a mensagem sai só em dólar. Também rejeita
+valor fora de 3–20: se a API mudar de formato, é melhor não mostrar real nenhum
+do que mostrar um número errado com cara de certo.
+
 ## Por que os critérios são esses
 
 Para LLM local, dois números decidem: **memória unificada** define se o modelo carrega,

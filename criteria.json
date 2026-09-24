@@ -2,8 +2,13 @@
   "max_price": 1900,
   "min_ram_gb": 24,
   "min_bandwidth": 120,
-  "blocked_chips": ["M3 Pro"],
-
+  "blocked_chips": [
+    "M3 Pro"
+  ],
   "stretch_price": 2300,
-  "stretch_min_bandwidth": 250
+  "stretch_min_bandwidth": 250,
+  "imposto_vendas_eua": 0.065,
+  "iof": 0.035,
+  "isencao_usd": 1000,
+  "imposto_importacao": 0.5
 }

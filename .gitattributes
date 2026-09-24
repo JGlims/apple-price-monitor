@@ -1,0 +1,10 @@
+# Sem isto, o git no Windows converte tudo para CRLF na hora do checkout e
+# todo `git status` passa a mostrar os arquivos inteiros como modificados:
+# 1.545 linhas trocadas dos dois lados, zero mudanca real. Pior, um commit
+# feito assim vira um diff gigante que esconde a alteracao de verdade.
+* text=auto eol=lf
+
+# Estes DEVEM ser CRLF: o Windows PowerShell 5.1 e o formato nativo deles.
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
